@@ -1,5 +1,5 @@
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{ mpsc, Mutex };
+use tokio::sync::{ Mutex };
 use tokio_stream::StreamExt;
 use tokio_util::codec::{ Framed, LinesCodec };
 
@@ -8,11 +8,15 @@ use tracing_subscriber;
 
 
 use futures::SinkExt;
-use std::collections::HashMap;
 use std::error::Error;
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+
+pub mod shared;
+pub use shared::{Shared};
+pub mod peer;
+pub use peer::{ Peer };
+
 
 pub async fn run(addr: &str) ->  Result<(), Box<dyn Error>> {
   tracing_subscriber::fmt::init();
@@ -37,47 +41,6 @@ pub async fn run(addr: &str) ->  Result<(), Box<dyn Error>> {
     }
 }
 
-type Tx = mpsc::UnboundedSender<String>;
-type Rx = mpsc::UnboundedReceiver<String>;
-
-struct Shared {
-    peers: HashMap<SocketAddr, Tx>,
-}
-
-struct Peer {
-    lines: Framed<TcpStream, LinesCodec>,
-    rx: Rx,
-}
-
-impl Shared {
-    fn new() -> Self {
-        Shared {
-            peers: HashMap::new(),
-        }
-    }
-
-    async fn broadcast(&mut self, sender: SocketAddr, message: &str) {
-        for peer in self.peers.iter_mut() {
-            if *peer.0 != sender {
-                let _ = peer.1.send(message.into());
-            }
-        }
-    }
-}
-
-impl Peer {
-    async fn new(
-        state: Arc<Mutex<Shared>>,
-        lines: Framed<TcpStream, LinesCodec>
-    ) -> io::Result<Peer> {
-        let addr = lines.get_ref().peer_addr()?;
-
-        let ( tx, rx ) = mpsc::unbounded_channel();
-        state.lock().await.peers.insert(addr, tx);
-
-        Ok(Peer{ lines, rx })
-    }
-}
 
 async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr)
 -> Result<(), Box<dyn Error>> {
