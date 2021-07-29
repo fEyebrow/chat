@@ -16,12 +16,14 @@ pub mod shared;
 pub use shared::{Shared};
 pub mod peer;
 pub use peer::{ Peer };
+pub mod room;
+pub use room::{ Room };
 
 
 pub async fn run(addr: &str) ->  Result<(), Box<dyn Error>> {
   tracing_subscriber::fmt::init();
 
-    let state = Arc::new(Mutex::new(Shared::new()));
+    let rooms = init_rooms();
 
     let listener = TcpListener::bind(&addr).await?;
 
@@ -30,19 +32,25 @@ pub async fn run(addr: &str) ->  Result<(), Box<dyn Error>> {
     loop {
         let (stream, addr) = listener.accept().await?;
 
-        let state = Arc::clone(&state);
+        let rooms = Arc::clone(&rooms);
 
         tokio::spawn(async move {
             debug!("accepted connection");
-            if let Err(e) = process(state, stream, addr).await {
+            if let Err(e) = process(rooms, stream, addr).await {
                 info!("an error occured; error = {:?}", e);
             }
         });
     }
 }
 
+fn init_rooms() -> Arc<Vec<Room>> {
+    let state1 = Arc::new(Mutex::new(Shared::new()));
+    let state2 = Arc::new(Mutex::new(Shared::new()));
+    Arc::new(vec![Room::new(String::from("pub"), state1), Room::new(String::from("dota2"), state2)])
+}
 
-async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr)
+
+async fn process(rooms: Arc<Vec<Room>>, stream: TcpStream, addr: SocketAddr)
 -> Result<(), Box<dyn Error>> {
     let mut lines = Framed::new(stream, LinesCodec::new());
     lines.send("please enter your username:").await?;
@@ -55,6 +63,26 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr)
         },
     };
 
+    lines.send("please select a chat room\n- pub\n- dota2").await?;
+    let room_key = match lines.next().await {
+        Some(Ok(line)) => line,
+        _ => {
+            tracing::error!("Failed to get the name of room");
+            return Ok(());
+        },
+    };
+    let mut state: Option<Arc<Mutex<Shared>>> = None;
+    for room in rooms.iter() {
+        if room.key == room_key {
+            state = Some(Arc::clone(&room.state));
+        }
+    }
+    if let None = state {
+        tracing::error!("Failed to find the room selected");
+        return Ok(());
+    }
+
+    let state = state.unwrap();
     let mut peer = Peer::new(state.clone(), lines).await?;
 
     {
