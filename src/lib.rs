@@ -1,13 +1,9 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{ Mutex };
-use tokio_stream::StreamExt;
-use tokio_util::codec::{ Framed, LinesCodec };
 
 use tracing::{info, debug};
 use tracing_subscriber;
 
-
-use futures::SinkExt;
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,6 +14,9 @@ pub mod peer;
 pub use peer::{ Peer };
 pub mod room;
 pub use room::{ Room };
+
+use futures_util::{SinkExt, StreamExt};
+use tungstenite::protocol::Message;
 
 
 pub async fn run(addr: &str) ->  Result<(), Box<dyn Error>> {
@@ -52,28 +51,35 @@ fn init_rooms() -> Arc<Vec<Room>> {
 
 async fn process(rooms: Arc<Vec<Room>>, stream: TcpStream, addr: SocketAddr)
 -> Result<(), Box<dyn Error>> {
-    let mut lines = Framed::new(stream, LinesCodec::new());
-    lines.send("please enter your username:").await?;
+    println!("Incoming TCP connection from: {}", addr);
 
-    let username = match lines.next().await {
-        Some(Ok(line)) => line,
+    let mut ws_stream = tokio_tungstenite::accept_async(stream)
+        .await
+        .expect("Error during the websocket handshake occurred");
+
+    ws_stream.send(Message::Text("please enter your username:".to_owned())).await?;
+
+    let username = match ws_stream.next().await {
+        Some(msg) => msg.unwrap(),
         _ => {
             tracing::error!("Failed to get username from {}. Client disconnected.", addr);
             return Ok(());
         },
     };
+    println!("username: {}", username);
 
-    lines.send("please select a chat room\n- pub\n- dota2").await?;
-    let room_key = match lines.next().await {
-        Some(Ok(line)) => line,
+    ws_stream.send(Message::Text("please select a chat room\n- pub\n- dota2".to_owned())).await?;
+    let room_key = match ws_stream.next().await {
+        Some(msg) => msg.unwrap(),
         _ => {
             tracing::error!("Failed to get the name of room");
             return Ok(());
         },
     };
+
     let mut state: Option<Arc<Mutex<Shared>>> = None;
     for room in rooms.iter() {
-        if room.key == room_key {
+        if room.key == room_key.to_string() {
             state = Some(Arc::clone(&room.state));
         }
     }
@@ -81,9 +87,11 @@ async fn process(rooms: Arc<Vec<Room>>, stream: TcpStream, addr: SocketAddr)
         tracing::error!("Failed to find the room selected");
         return Ok(());
     }
+    ws_stream.send(Message::Text(format!("joined to {} room", room_key).to_owned())).await?;
 
     let state = state.unwrap();
-    let mut peer = Peer::new(state.clone(), lines).await?;
+
+    let mut peer = Peer::new(state.clone(), ws_stream).await?;
 
     {
         let mut state = state.lock().await;
@@ -92,25 +100,20 @@ async fn process(rooms: Arc<Vec<Room>>, stream: TcpStream, addr: SocketAddr)
         state.broadcast(addr, &msg).await;
     }
 
+    let (mut outgoing,mut incoming) = peer.ws.split();
     loop {
         tokio::select! {
-            Some(msg) = peer.rx.recv() => {
-                peer.lines.send(&msg).await?;
+            msg = peer.rx.next() => {
+                outgoing.send(Message::Text(msg.unwrap())).await?;
             }
-            result = peer.lines.next() => match result {
-                Some(Ok(msg)) => {
+
+            msg = incoming.next() => match msg {
+                Some(msg) => {
                     let mut state = state.lock().await;
-                    let msg = format!("{}: {}", username, msg);
+                    let msg = format!("{}: {}", username, msg.unwrap().to_string());
 
                     state.broadcast(addr, &msg).await
                 },
-                Some(Err(e)) => {
-                    tracing::error!(
-                        "an error occured while processing message for {}; error = {:?}",
-                        username,
-                        e
-                    )
-                }
                 None => break,
             }
         }

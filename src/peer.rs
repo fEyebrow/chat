@@ -1,29 +1,28 @@
-use tokio::sync::{ mpsc, Mutex };
-use tokio_util::codec::{ Framed, LinesCodec };
+use tokio::{net::TcpSocket, sync::{ Mutex }};
 use tokio::net::{TcpStream};
 use std::io;
 use std::sync::Arc;
 use crate::shared::{Shared};
+use tokio_tungstenite::{ WebSocketStream };
+use futures_channel::mpsc::{unbounded, UnboundedReceiver};
 
-
-type Rx = mpsc::UnboundedReceiver<String>;
+type Rx = UnboundedReceiver<String>;
 
 pub struct Peer {
-    pub lines: Framed<TcpStream, LinesCodec>,
+    pub ws: WebSocketStream<TcpStream>,
     pub rx: Rx,
 }
-
 
 impl Peer {
     pub async fn new(
         state: Arc<Mutex<Shared>>,
-        lines: Framed<TcpStream, LinesCodec>
+        ws: WebSocketStream<TcpStream>,
     ) -> io::Result<Peer> {
-        let addr = lines.get_ref().peer_addr()?;
+        let addr = ws.get_ref().peer_addr()?;
 
-        let ( tx, rx ) = mpsc::unbounded_channel();
+        let (tx, rx) = unbounded();
         state.lock().await.peers.insert(addr, tx);
 
-        Ok(Peer{ lines, rx })
+        Ok(Peer{ ws, rx })
     }
 }

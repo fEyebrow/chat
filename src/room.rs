@@ -14,8 +14,4 @@ impl Room {
       state
     }
   }
-
-  pub fn join() {
-
-  }
 }

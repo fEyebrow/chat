@@ -1,25 +1,25 @@
-use std::collections::HashMap;
+use dashmap::DashMap;
 use std::net::SocketAddr;
-use tokio::sync::{ mpsc };
+use futures_channel::mpsc::{UnboundedSender};
 
-type Tx = mpsc::UnboundedSender<String>;
+type Tx = UnboundedSender<String>;
 
 pub struct Shared {
-  pub peers: HashMap<SocketAddr, Tx>,
+  pub peers: DashMap<SocketAddr, Tx>,
 }
 
 impl Shared {
   pub fn new() -> Self {
       Shared {
-          peers: HashMap::new(),
+          peers: DashMap::new(),
       }
   }
 
   pub async fn broadcast(&mut self, sender: SocketAddr, message: &str) {
-      for peer in self.peers.iter_mut() {
-          if *peer.0 != sender {
-              let _ = peer.1.send(message.into());
-          }
+    for peer in self.peers.iter() {
+      if *peer.key() != sender {
+          let _ = peer.value().unbounded_send(message.into());
       }
+    }
   }
 }
