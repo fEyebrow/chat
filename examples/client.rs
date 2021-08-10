@@ -19,14 +19,15 @@ async fn main() {
   loop {
     tokio::select! {
       msg = stdin_rx.next() => {
-        write.send(msg.unwrap()).await;
+        let msg_ = msg.unwrap();
+        write.send(msg_).await.unwrap();
       }
 
       msg = read.next() => match msg {
         Some(msg) => {
           let text = msg.unwrap().into_text().unwrap();
-          println!("println {}", text);
-          tokio::io::stdout().write_all(text.as_bytes()).await.unwrap();
+          println!("{}", text);
+          // tokio::io::stdout().write_all(text.as_bytes()).await.unwrap();
         },
         None => break,
       }
@@ -43,7 +44,7 @@ async fn read_stdin(tx: futures_channel::mpsc::UnboundedSender<Message>) {
       Ok(n) => n,
     };
     buf.truncate(n);
-    let msg = String::from(std::str::from_utf8(&buf).unwrap());
+    let msg = String::from(std::str::from_utf8(&buf).unwrap().replace("\n", ""));
     tx.unbounded_send(Message::Text(msg));
   }
 }
