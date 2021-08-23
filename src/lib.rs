@@ -1,12 +1,23 @@
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{ Mutex };
-
-use tracing::{info, debug};
-use tracing_subscriber;
-
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::net::ToSocketAddrs;
+use std::io::{self, BufReader};
+use std::path::{Path, PathBuf};
+use std::fs::File;
+use std::io::prelude::*;
+
+
+use futures_util::{SinkExt, StreamExt};
+use tokio_rustls::TlsAcceptor;
+use tungstenite::protocol::Message;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{ Mutex };
+use tracing::{info, debug};
+use tracing_subscriber;
+use tokio_rustls::rustls::internal::pemfile::{certs, pkcs8_private_keys};
+use tokio_rustls::rustls::{ Certificate, NoClientAuth, PrivateKey, ServerConfig };
+use argh::FromArgs;
 
 pub mod shared;
 pub use shared::{Shared};
@@ -15,12 +26,56 @@ pub use peer::{ Peer };
 pub mod room;
 pub use room::{ Room };
 
-use futures_util::{SinkExt, StreamExt};
-use tungstenite::protocol::Message;
+/// tokio tls server
+#[derive(FromArgs)]
+pub struct Options {
+    ///bind addr
+    #[argh(positional)]
+    pub addr: String,
+
+    /// cert file
+    #[argh(option, short = 'c', default="PathBuf::from(r\"localhost.crt\")")]
+    pub cert: PathBuf,
+
+    /// key file
+    #[argh(option, short =  'k', default="PathBuf::from(r\"localhost.key\")")]
+    pub key: PathBuf,
+}
+
+fn load_certs(path: &Path) -> io::Result<Vec<Certificate>> {
+    certs(&mut BufReader::new(File::open(path)?))
+        .map_err(|e| {
+            tracing::error!("invalid cert {:?}", e);
+            io::Error::new(io::ErrorKind::InvalidInput, "invalid cert")
+        })
+        // .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid cert"))
+}
+
+fn load_keys(path: &Path) -> io::Result<Vec<PrivateKey>> {
+    pkcs8_private_keys(&mut BufReader::new(File::open(path)?))
+        .map_err(|e| {
+            tracing::error!("invalid key {:?}", e);
+            io::Error::new(io::ErrorKind::InvalidInput, "invalid key")
+        })
+}
+
+pub async fn run() ->  Result<(), Box<dyn Error>> {
+    tracing_subscriber::fmt::init();
+    let options: Options = argh::from_env();
+
+    let addr = options
+        .addr
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::from(io::ErrorKind::AddrNotAvailable))?;
 
 
-pub async fn run(addr: &str) ->  Result<(), Box<dyn Error>> {
-  tracing_subscriber::fmt::init();
+    let certs = load_certs(&options.cert)?;
+    let mut keys = load_keys(&options.key)?;
+    let mut config = ServerConfig::new(NoClientAuth::new());
+    config.set_single_cert(certs, keys.remove(0))
+          .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    let acceptor = TlsAcceptor::from(Arc::new(config));
 
     let rooms = init_rooms();
 
@@ -32,10 +87,11 @@ pub async fn run(addr: &str) ->  Result<(), Box<dyn Error>> {
         let (stream, addr) = listener.accept().await?;
 
         let rooms = Arc::clone(&rooms);
+        let acceptor = acceptor.clone();
 
         tokio::spawn(async move {
             debug!("accepted connection");
-            if let Err(e) = process(rooms, stream, addr).await {
+            if let Err(e) = process(rooms, stream, addr, acceptor).await {
                 info!("an error occured; error = {:?}", e);
             }
         });
@@ -49,9 +105,10 @@ fn init_rooms() -> Arc<Vec<Room>> {
 }
 
 
-async fn process(rooms: Arc<Vec<Room>>, stream: TcpStream, addr: SocketAddr)
+async fn process(rooms: Arc<Vec<Room>>, stream: TcpStream, addr: SocketAddr, acceptor: TlsAcceptor)
 -> Result<(), Box<dyn Error>> {
     println!("Incoming TCP connection from: {}", addr);
+    let mut stream = acceptor.accept(stream).await?;
 
     let mut ws_stream = tokio_tungstenite::accept_async(stream)
         .await

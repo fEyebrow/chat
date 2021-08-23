@@ -1,0 +1,56 @@
+Skip to content
+Search or jump to…
+Pulls
+Issues
+Marketplace
+Explore
+
+@fEyebrow
+SauceChord
+/
+tls-websockets-example
+1
+10
+Code
+Issues
+Pull requests
+Actions
+Projects
+Wiki
+Security
+Insights
+tls-websockets-example/src/webclient.html
+@SauceChord
+SauceChord Add broken example
+Latest commit c4ade34 25 days ago
+ History
+ 1 contributor
+27 lines (24 sloc)  794 Bytes
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WebSocket Client</title>
+  </head>
+  <body>
+    <p>Message from localhost:8443 > <span id="reply">...</span></p>
+    <script>
+        let uri = "wss://localhost:1642";
+        webSocket = new WebSocket(uri);
+
+        webSocket.onopen = function (event) {
+            webSocket.send("This is the browser");
+        };
+
+        webSocket.onmessage = function (event) {
+            document.getElementById("reply").textContent = event.data;
+        };
+
+        webSocket.onerror = function (event) {
+            document.getElementById("reply").textContent = "ERROR! Check Browser Console!";
+            console.error("WebSocket error observed:", event);
+        };
+    </script>
+  </body>
+</html>

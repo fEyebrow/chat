@@ -6,7 +6,7 @@ use tokio_tungstenite::{ connect_async, tungstenite::protocol::Message };
 #[tokio::main]
 async fn main() {
   let connect_addr =
-    env::args().nth(1).unwrap_or_else(|| "ws://127.0.0.1:1642/".to_string());
+    env::args().nth(1).unwrap_or_else(|| "wss://localhost:1642/".to_string());
 
   let url = url::Url::parse(&connect_addr).unwrap();
 
